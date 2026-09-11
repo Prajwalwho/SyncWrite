@@ -1,0 +1,69 @@
+# Global ignore rules for the entire client + server project
+
+# Node / build artifacts
+node_modules/
+**/node_modules/
+dist/
+build/
+.vite/
+**/.vite/
+.cache/
+coverage/
+Client/dist/
+Client/build/
+Client/.vite/
+server/dist/
+server/build/
+
+# Logs & diagnostics
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+pnpm-debug.log*
+
+# Environment files
+.env
+.env.*
+Client/.env
+Client/.env.*
+server/.env
+server/.env.*
+
+# Temporary files
+*.tmp
+tmp/
+temp/
+
+# Editor & system files
+.DS_Store
+.DS_Store?
+Thumb.db
+Thumbs.db
+.idea/
+.vscode/
+.history
+*.swp
+*.swo
+*~
+
+# Misc caches
+.eslintcache
+.pnp
+.pnp.js
+
+# Screenshots / media (allow public assets)
+Screenshots/
+*.png
+*.jpg
+*.jpeg
+*.gif
+!Client/public/**/*.png
+!Client/public/**/*.jpg
+!Client/public/**/*.jpeg
+!Client/public/**/*.gif
+
+# Tooling specific
+.claude/

@@ -1,0 +1,29 @@
+# Ignore rules for server workspace
+
+# Dependencies & build output
+node_modules/
+dist/
+build/
+
+# Logs
+logs/
+*.log
+
+# Environment files
+.env
+.env.*
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Editor & system files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.history
+*.swp
+*.swo
+*~
