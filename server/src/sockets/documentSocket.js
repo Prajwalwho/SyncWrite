@@ -7,6 +7,7 @@ const registerDocumentSocket = (io) => {
 const userSocketMap = {};
 
 const documentLocks = new Map(); // documentId -> Promise chain
+const liveDocuments = new Map(); // NEW: documentId -> { content, revision, opsLog, saveTimer }
 
 const withDocumentLock = (documentId, fn) => {
     const prev = documentLocks.get(documentId) || Promise.resolve();
@@ -54,30 +55,51 @@ const withDocumentLock = (documentId, fn) => {
         }
 
         await withDocumentLock(documentId, async () => {
-          const docData = await loadDocument(documentId);
-          if (!docData) {
-            socket.emit('operation-error', { message: 'Document not found' });
-            return;
+          // NEW: use the in-memory copy if we have one, only hit Mongo the first time
+          let live = liveDocuments.get(documentId);
+          if (!live) {
+            const docData = await loadDocument(documentId);
+            if (!docData) {
+              socket.emit('operation-error', { message: 'Document not found' });
+              return;
+            }
+            live = {
+              content: docData.content,
+              revision: docData.revision,
+              opsLog: docData.doc.opsLog,
+              saveTimer: null,
+            };
+            liveDocuments.set(documentId, live);
           }
 
-          let { doc, content, revision } = docData;
-
-          const concurrentOps = doc.opsLog.filter(o => o.appliedRevision > baseRevision);
+          const concurrentOps = live.opsLog.filter(o => o.appliedRevision > baseRevision);
           const transformedOp = transformSequence(op, concurrentOps);
 
-          content = applyOp(content, transformedOp);
-          const newRevision = revision + 1;
+          live.content = applyOp(live.content, transformedOp);
+          live.revision += 1;
 
-          const opToLog = { ...transformedOp, clientId, baseRevision, appliedRevision: newRevision, createdAt: new Date() };
-          await appendOperation(documentId, opToLog, newRevision);
-          await Document.findByIdAndUpdate(documentId, { content });
+          const opToLog = { ...transformedOp, clientId, baseRevision, appliedRevision: live.revision, createdAt: new Date() };
+          live.opsLog.push(opToLog);
 
-          socket.emit('operation-ack', { appliedRevision: newRevision, op: transformedOp });
-          socket.to(documentId).emit('document-operation', { op: transformedOp, appliedRevision: newRevision, clientId });
+          socket.emit('operation-ack', { appliedRevision: live.revision, op: transformedOp });
+          socket.to(documentId).emit('document-operation', { op: transformedOp, appliedRevision: live.revision, clientId });
+
+          // NEW: debounce the actual Mongo write instead of writing on every keystroke
+          clearTimeout(live.saveTimer);
+          live.saveTimer = setTimeout(() => {
+            appendOperation(documentId, opToLog, live.revision).catch(console.error);
+            Document.findByIdAndUpdate(documentId, { content: live.content }).catch(console.error);
+          }, 1500);
       });
     });
 
     socket.on('request-resync', async ({ documentId }) => {
+        // NEW: prefer the live in-memory copy so a resync doesn't hand back stale Mongo content
+        const live = liveDocuments.get(documentId);
+        if (live) {
+            socket.emit('document-state', { title: undefined, content: live.content, revision: live.revision, ops: [] });
+            return;
+        }
         const doc = await Document.findById(documentId);
         if (doc) {
             socket.emit('document-state', { title: doc.title, content: doc.content, revision: doc.revision, ops: [] });
