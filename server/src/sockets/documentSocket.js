@@ -6,8 +6,8 @@ import Document from '../models/Document.js';
 const registerDocumentSocket = (io) => {
 const userSocketMap = {};
 
-const documentLocks = new Map(); // documentId -> Promise chain
-const liveDocuments = new Map(); // NEW: documentId -> { content, revision, opsLog, saveTimer }
+const documentLocks = new Map();
+const liveDocuments = new Map();
 
 const withDocumentLock = (documentId, fn) => {
     const prev = documentLocks.get(documentId) || Promise.resolve();
@@ -32,6 +32,15 @@ const withDocumentLock = (documentId, fn) => {
       userSocketMap[socket.id] = documentId;
       socket.join(documentId);
 
+      // NEW: prefer the live in-memory copy, so a reconnecting/joining client
+      // never gets stale content that's behind what's currently being edited
+      const live = liveDocuments.get(documentId);
+      if (live) {
+        socket.emit('document-state', { title: live.title, content: live.content, revision: live.revision, ops: [] });
+        socket.to(documentId).emit('user-joined', { socketId: socket.id });
+        return;
+      }
+
       const doc = await Document.findById(documentId);
       if (!doc) {
         socket.emit('error', { message: 'Document not found' });
@@ -55,7 +64,6 @@ const withDocumentLock = (documentId, fn) => {
         }
 
         await withDocumentLock(documentId, async () => {
-          // NEW: use the in-memory copy if we have one, only hit Mongo the first time
           let live = liveDocuments.get(documentId);
           if (!live) {
             const docData = await loadDocument(documentId);
@@ -67,6 +75,7 @@ const withDocumentLock = (documentId, fn) => {
               content: docData.content,
               revision: docData.revision,
               opsLog: docData.doc.opsLog,
+              title: docData.doc.title, // NEW: store title so join-document can serve it from cache
               saveTimer: null,
             };
             liveDocuments.set(documentId, live);
@@ -84,7 +93,6 @@ const withDocumentLock = (documentId, fn) => {
           socket.emit('operation-ack', { appliedRevision: live.revision, op: transformedOp });
           socket.to(documentId).emit('document-operation', { op: transformedOp, appliedRevision: live.revision, clientId });
 
-          // NEW: debounce the actual Mongo write instead of writing on every keystroke
           clearTimeout(live.saveTimer);
           live.saveTimer = setTimeout(() => {
             appendOperation(documentId, opToLog, live.revision).catch(console.error);
@@ -94,10 +102,9 @@ const withDocumentLock = (documentId, fn) => {
     });
 
     socket.on('request-resync', async ({ documentId }) => {
-        // NEW: prefer the live in-memory copy so a resync doesn't hand back stale Mongo content
         const live = liveDocuments.get(documentId);
         if (live) {
-            socket.emit('document-state', { title: undefined, content: live.content, revision: live.revision, ops: [] });
+            socket.emit('document-state', { title: live.title, content: live.content, revision: live.revision, ops: [] }); // FIXED: use live.title instead of undefined
             return;
         }
         const doc = await Document.findById(documentId);

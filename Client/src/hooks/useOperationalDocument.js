@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { applyOp, transformSequence } from '../ot/operations';
+import { applyOp, transformSequence, transformAgainst } from '../ot/operations'; // FIXED: added transformAgainst import
 
 const useOperationalDocument = (documentId, initialTitle, initialContent, initialRevision, socket) => {
     const [content, setContent] = useState(initialContent);
@@ -13,14 +13,36 @@ const useOperationalDocument = (documentId, initialTitle, initialContent, initia
 
     useEffect(() => {
         if (socket) {
-            socket.on('connect', () => setConnected(true));
+            socket.on('connect', () => {
+                setConnected(true);
+                // NEW: (re)join the document room every time we connect —
+                // this covers both the first connection AND any reconnect after a drop
+                socket.emit('join-document', { documentId });
+            });
+
             socket.on('disconnect', () => setConnected(false));
 
             socket.on('document-state', (doc) => {
-                setContent(doc.content);
+                // NEW: reapply any unacknowledged local edits on top of the fresh server content,
+                // instead of just discarding them
+                let newContent = doc.content;
+                for (const pendingOp of pendingOps) {
+                    newContent = applyOp(newContent, pendingOp);
+                }
+                setContent(newContent);
                 setTitle(doc.title);
                 setRevision(doc.revision);
-                setPendingOps([]);
+
+                // NEW: resubmit unacknowledged ops against the new base revision
+                if (pendingOps.length > 0) {
+                    const resubmitOps = pendingOps.map(op => ({ ...op, baseRevision: doc.revision }));
+                    setPendingOps(resubmitOps);
+                    resubmitOps.forEach(op => {
+                        socket.emit('submit-operation', { documentId, op });
+                    });
+                } else {
+                    setPendingOps([]);
+                }
             });
 
             socket.on('operation-ack', ({ appliedRevision }) => {
@@ -45,7 +67,6 @@ const useOperationalDocument = (documentId, initialTitle, initialContent, initia
 
             socket.on('operation-error', (err) => {
                 setError(err.message);
-                // Optionally trigger resync
                 socket.emit('request-resync', { documentId });
             });
 
@@ -66,14 +87,12 @@ const useOperationalDocument = (documentId, initialTitle, initialContent, initia
             while (start < oldStr.length && start < newStr.length && oldStr[start] === newStr[start]) {
                 start++;
             }
-
             let endOld = oldStr.length;
             let endNew = newStr.length;
             while (endOld > start && endNew > start && oldStr[endOld - 1] === newStr[endNew - 1]) {
                 endOld--;
                 endNew--;
             }
-
             if (endOld > start) {
                 return { type: 'delete', pos: start, length: endOld - start };
             }
