@@ -59,7 +59,7 @@ const removeUserFromDocument = (documentId, socketId) => {
 
       // NEW: register this socket as present on the document
       if (!documentUsers.has(documentId)) documentUsers.set(documentId, new Map());
-      const userInfo = { name: randomName(), color: randomColor() };
+      const userInfo = { name: randomName(), color: randomColor(), cursorPos: 0 };
       documentUsers.get(documentId).set(socket.id, userInfo);
       socket.emit('presence-self', { socketId: socket.id, ...userInfo });
       broadcastPresence(documentId);
@@ -141,6 +141,14 @@ const removeUserFromDocument = (documentId, socketId) => {
         if (doc) {
             socket.emit('document-state', { title: doc.title, content: doc.content, revision: doc.revision, ops: [] });
         }
+    });
+
+    socket.on('cursor-update', ({ documentId, pos }) => {
+        const users = documentUsers.get(documentId);
+        if (users && users.has(socket.id)) {
+            users.get(socket.id).cursorPos = pos;
+        }
+        socket.to(documentId).emit('cursor-update', { socketId: socket.id, pos });
     });
 
     socket.on('leave-document', ({ documentId }) => {
