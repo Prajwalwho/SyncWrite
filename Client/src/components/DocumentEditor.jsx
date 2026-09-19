@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { getDocument, updateDocument } from '../api/documentService';
 import { socket } from '../api/socketService';
 import useOperationalDocument from '../hooks/useOperationalDocument';
+import usePresence from '../hooks/usePresence';
 
 const DocumentEditor = ({ documentId, onBack }) => {
     const [initialData, setInitialData] = useState(null);
@@ -10,7 +11,7 @@ const DocumentEditor = ({ documentId, onBack }) => {
     useEffect(() => {
         if (documentId) {
             socket.connect();
-            socket.emit('join-document', { documentId });
+            // join-document is now handled inside useOperationalDocument on every 'connect' event
 
             getDocument(documentId).then(doc => {
                 setInitialData(doc);
@@ -40,13 +41,31 @@ const Editor = ({ initialData, onBack, documentId }) => {
         socket
     );
 
+    const { otherUsers } = usePresence(documentId, socket);
+
     const handleTitleChange = (newTitle) => {
-        // For now, title changes are handled via REST
         updateDocument(documentId, { title: newTitle });
     };
 
     return (
         <div className="document-editor">
+            <div className="presence-bar" style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                {otherUsers.map(u => (
+                    <span
+                        key={u.socketId}
+                        style={{
+                            backgroundColor: u.color,
+                            color: '#fff',
+                            padding: '2px 8px',
+                            borderRadius: '12px',
+                            fontSize: '12px'
+                        }}
+                    >
+                        {u.name}
+                    </span>
+                ))}
+            </div>
+
             <input
                 type="text"
                 defaultValue={title}

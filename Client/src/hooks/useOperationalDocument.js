@@ -1,112 +1,119 @@
 import { useState, useEffect, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { applyOp, transformSequence, transformAgainst } from '../ot/operations'; // FIXED: added transformAgainst import
+import { applyOp, transformSequence, transformAgainst } from '../ot/operations';
 
 const useOperationalDocument = (documentId, initialTitle, initialContent, initialRevision, socket) => {
     const [content, setContent] = useState(initialContent);
     const [title, setTitle] = useState(initialTitle);
     const [revision, setRevision] = useState(initialRevision);
-    const [pendingOps, setPendingOps] = useState([]);
     const [connected, setConnected] = useState(false);
     const [error, setError] = useState(null);
     const clientId = useRef(uuidv4());
 
+    const contentRef = useRef(initialContent);
+    const revisionRef = useRef(initialRevision);
+    const pendingOpsRef = useRef([]);
+
     useEffect(() => {
-        if (socket) {
-            socket.on('connect', () => {
-                setConnected(true);
-                // NEW: (re)join the document room every time we connect —
-                // this covers both the first connection AND any reconnect after a drop
-                socket.emit('join-document', { documentId });
-            });
+        if (!socket) return;
 
-            socket.on('disconnect', () => setConnected(false));
+        const handleConnect = () => {
+            setConnected(true);
+            socket.emit('join-document', { documentId });
+        };
+        const handleDisconnect = () => setConnected(false);
 
-            socket.on('document-state', (doc) => {
-                // NEW: reapply any unacknowledged local edits on top of the fresh server content,
-                // instead of just discarding them
-                let newContent = doc.content;
-                for (const pendingOp of pendingOps) {
-                    newContent = applyOp(newContent, pendingOp);
-                }
-                setContent(newContent);
-                setTitle(doc.title);
-                setRevision(doc.revision);
+        const handleDocumentState = (doc) => {
+            let newContent = doc.content;
+            for (const pendingOp of pendingOpsRef.current) {
+                newContent = applyOp(newContent, pendingOp);
+            }
+            contentRef.current = newContent;
+            revisionRef.current = doc.revision;
+            setContent(newContent);
+            setTitle(doc.title);
+            setRevision(doc.revision);
 
-                // NEW: resubmit unacknowledged ops against the new base revision
-                if (pendingOps.length > 0) {
-                    const resubmitOps = pendingOps.map(op => ({ ...op, baseRevision: doc.revision }));
-                    setPendingOps(resubmitOps);
-                    resubmitOps.forEach(op => {
-                        socket.emit('submit-operation', { documentId, op });
-                    });
-                } else {
-                    setPendingOps([]);
-                }
-            });
+            if (pendingOpsRef.current.length > 0) {
+                const resubmitOps = pendingOpsRef.current.map(op => ({ ...op, baseRevision: doc.revision }));
+                pendingOpsRef.current = resubmitOps;
+                resubmitOps.forEach(op => socket.emit('submit-operation', { documentId, op }));
+            } else {
+                pendingOpsRef.current = [];
+            }
+        };
 
-            socket.on('operation-ack', ({ appliedRevision }) => {
-                setPendingOps(prev => prev.slice(1));
-                setRevision(appliedRevision);
-            });
+        const handleOperationAck = ({ appliedRevision }) => {
+            pendingOpsRef.current = pendingOpsRef.current.slice(1);
+            revisionRef.current = appliedRevision;
+            setRevision(appliedRevision);
+        };
 
-            socket.on('document-operation', ({ op, appliedRevision, clientId: opClientId }) => {
-                if (opClientId === clientId.current) return;
+        const handleDocumentOperation = ({ op, appliedRevision, clientId: opClientId }) => {
+            if (opClientId === clientId.current) return;
 
-                let transformedIncomingOp = op;
-                const newPendingOps = [];
-                for (const pendingOp of pendingOps) {
-                    transformedIncomingOp = transformAgainst(transformedIncomingOp, pendingOp);
-                    newPendingOps.push(transformAgainst(pendingOp, op));
-                }
+            let transformedIncomingOp = op;
+            const newPendingOps = [];
+            for (const pendingOp of pendingOpsRef.current) {
+                transformedIncomingOp = transformAgainst(transformedIncomingOp, pendingOp);
+                newPendingOps.push(transformAgainst(pendingOp, op));
+            }
 
-                setContent(prev => applyOp(prev, transformedIncomingOp));
-                setPendingOps(newPendingOps);
-                setRevision(appliedRevision);
-            });
+            contentRef.current = applyOp(contentRef.current, transformedIncomingOp);
+            pendingOpsRef.current = newPendingOps;
+            revisionRef.current = appliedRevision;
 
-            socket.on('operation-error', (err) => {
-                setError(err.message);
-                socket.emit('request-resync', { documentId });
-            });
+            setContent(contentRef.current);
+            setRevision(appliedRevision);
+        };
 
-            return () => {
-                socket.off('connect');
-                socket.off('disconnect');
-                socket.off('document-state');
-                socket.off('operation-ack');
-                socket.off('document-operation');
-                socket.off('operation-error');
-            };
+        const handleOperationError = (err) => {
+            setError(err.message);
+            socket.emit('request-resync', { documentId });
+        };
+
+        socket.on('connect', handleConnect);
+        socket.on('disconnect', handleDisconnect);
+        socket.on('document-state', handleDocumentState);
+        socket.on('operation-ack', handleOperationAck);
+        socket.on('document-operation', handleDocumentOperation);
+        socket.on('operation-error', handleOperationError);
+
+        if (socket.connected) {
+            handleConnect();
         }
-    }, [socket, documentId, content, pendingOps]);
+
+        
+        return () => {
+            socket.off('connect', handleConnect);
+            socket.off('disconnect', handleDisconnect);
+            socket.off('document-state', handleDocumentState);
+            socket.off('operation-ack', handleOperationAck);
+            socket.off('document-operation', handleDocumentOperation);
+            socket.off('operation-error', handleOperationError);
+        };
+    }, [socket, documentId]);
 
     const handleContentChange = (newContent) => {
         const diff = (oldStr, newStr) => {
             let start = 0;
-            while (start < oldStr.length && start < newStr.length && oldStr[start] === newStr[start]) {
-                start++;
-            }
+            while (start < oldStr.length && start < newStr.length && oldStr[start] === newStr[start]) start++;
             let endOld = oldStr.length;
             let endNew = newStr.length;
             while (endOld > start && endNew > start && oldStr[endOld - 1] === newStr[endNew - 1]) {
-                endOld--;
-                endNew--;
+                endOld--; endNew--;
             }
-            if (endOld > start) {
-                return { type: 'delete', pos: start, length: endOld - start };
-            }
-            if (endNew > start) {
-                return { type: 'insert', pos: start, text: newStr.slice(start, endNew) };
-            }
+            if (endOld > start) return { type: 'delete', pos: start, length: endOld - start };
+            if (endNew > start) return { type: 'insert', pos: start, text: newStr.slice(start, endNew) };
             return null;
         };
 
-        const op = diff(content, newContent);
+        const op = diff(contentRef.current, newContent);
         if (op) {
-            const opWithRevision = { ...op, baseRevision: revision, clientId: clientId.current };
-            setPendingOps(prev => [...prev, opWithRevision]);
-            setContent(applyOp(content, op));
+            const opWithRevision = { ...op, baseRevision: revisionRef.current, clientId: clientId.current };
+            pendingOpsRef.current = [...pendingOpsRef.current, opWithRevision];
+            contentRef.current = applyOp(contentRef.current, op);
+            setContent(contentRef.current);
             socket.emit('submit-operation', { documentId, op: opWithRevision });
         }
     };

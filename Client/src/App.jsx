@@ -1,33 +1,29 @@
-import React, { useState } from 'react';
+import React from 'react';
+import { BrowserRouter, Routes, Route, useNavigate, useParams } from 'react-router-dom';
 import DocumentList from './components/DocumentList';
 import DocumentEditor from './components/DocumentEditor';
 
+const ListPage = () => {
+  const navigate = useNavigate();
+  return <DocumentList onSelectDocument={(id) => navigate(`/document/${id}`)} />;
+};
+
+const EditorPage = () => {
+  const { documentId } = useParams();
+  const navigate = useNavigate();
+  return <DocumentEditor documentId={documentId} onBack={() => navigate('/')} />;
+};
+
 const App = () => {
-  const [currentView, setCurrentView] = useState('list');
-  const [documentId, setDocumentId] = useState(null);
-
-  const handleSelectDocument = (id) => {
-    setDocumentId(id);
-    setCurrentView('editor');
-  };
-
-  const handleBack = () => {
-    setDocumentId(null);
-    setCurrentView('list');
-  };
-
-
   return (
-    <div className="container">
-      {currentView === 'list' ? (
-        <DocumentList onSelectDocument={handleSelectDocument} />
-      ) : (
-        <DocumentEditor
-          documentId={documentId}
-          onBack={handleBack}
-        />
-      )}
-    </div>
+    <BrowserRouter>
+      <div className="container">
+        <Routes>
+          <Route path="/" element={<ListPage />} />
+          <Route path="/document/:documentId" element={<EditorPage />} />
+        </Routes>
+      </div>
+    </BrowserRouter>
   );
 };
 
