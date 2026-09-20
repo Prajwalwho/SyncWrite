@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { applyOp, transformSequence, transformAgainst } from '../ot/operations';
 
-const useOperationalDocument = (documentId, initialTitle, initialContent, initialRevision, socket) => {
+const useOperationalDocument = (documentId, initialTitle, initialContent, initialRevision, socket, onLocalOperation) => { // CHANGED: added onLocalOperation param
     const [content, setContent] = useState(initialContent);
     const [title, setTitle] = useState(initialTitle);
     const [revision, setRevision] = useState(initialRevision);
@@ -83,7 +83,6 @@ const useOperationalDocument = (documentId, initialTitle, initialContent, initia
             handleConnect();
         }
 
-        
         return () => {
             socket.off('connect', handleConnect);
             socket.off('disconnect', handleDisconnect);
@@ -115,6 +114,7 @@ const useOperationalDocument = (documentId, initialTitle, initialContent, initia
             contentRef.current = applyOp(contentRef.current, op);
             setContent(contentRef.current);
             socket.emit('submit-operation', { documentId, op: opWithRevision });
+            if (onLocalOperation) onLocalOperation(op); // NEW: let cursor tracking know about our own edit
         }
     };
 
