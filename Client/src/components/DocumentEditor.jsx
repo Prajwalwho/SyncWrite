@@ -5,18 +5,26 @@ import useOperationalDocument from '../hooks/useOperationalDocument';
 import usePresence from '../hooks/usePresence';
 import useCursors from '../hooks/useCursors';
 import { getCaretCoordinates } from '../utils/caretCoordinates';
+import ShareModal from './ShareModal';
 
 const DocumentEditor = ({ documentId, onBack }) => {
     const [initialData, setInitialData] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState(null);
 
     useEffect(() => {
         if (documentId) {
             socket.connect();
-            getDocument(documentId).then(doc => {
-                setInitialData(doc);
-                setLoading(false);
-            });
+            getDocument(documentId)
+                .then(doc => {
+                    setInitialData(doc);
+                    setLoading(false);
+                })
+                .catch(err => {
+                    setLoadError(err.message);
+                    setLoading(false);
+                });
+
             return () => {
                 socket.emit('leave-document', { documentId });
                 socket.disconnect();
@@ -26,31 +34,48 @@ const DocumentEditor = ({ documentId, onBack }) => {
 
     if (loading) return <div>Loading...</div>;
 
+    if (loadError) {
+        return (
+            <div style={{ textAlign: 'center', marginTop: '80px' }}>
+                <h2>Can't open this document</h2>
+                <p style={{ color: '#666' }}>{loadError}</p>
+                <button className="btn" onClick={onBack}>Back to documents</button>
+            </div>
+        );
+    }
+
     return <Editor initialData={initialData} onBack={onBack} documentId={documentId} />;
 };
 
 const Editor = ({ initialData, onBack, documentId }) => {
-    const { content, title, handleContentChange, connected, error } = useOperationalDocument(
-        documentId, initialData.title, initialData.content, initialData.revision, socket
-    );
-
+    // CHANGED: usePresence and useCursors now come BEFORE useOperationalDocument,
+    // since useOperationalDocument needs shiftCursorsForLocalOp as an argument
     const { otherUsers } = usePresence(documentId, socket);
     const textareaRef = useRef(null);
-    const { cursors, emitCursor } = useCursors(documentId, socket, textareaRef);
-    const [markers, setMarkers] = useState([]);
+    const { cursors, emitCursor, shiftCursorsForLocalOp } = useCursors(documentId, socket, textareaRef);
 
-    // Recompute pixel positions whenever content or received cursor positions change
-    useEffect(() => {
+    const { content, title, handleContentChange, connected, error } = useOperationalDocument(
+        documentId, initialData.title, initialData.content, initialData.revision, socket, shiftCursorsForLocalOp
+    );
+
+    const [markers, setMarkers] = useState([]);
+    const [showShareModal, setShowShareModal] = useState(false);
+
+        useEffect(() => {
         const textarea = textareaRef.current;
         if (!textarea) return;
 
-        const next = otherUsers
-            .filter(u => cursors[u.socketId] !== undefined)
-            .map(u => {
-                const { top, left } = getCaretCoordinates(textarea, cursors[u.socketId]);
-                return { ...u, top, left };
-            });
-        setMarkers(next);
+        const timeoutId = setTimeout(() => {
+            const next = otherUsers
+                .filter(u => cursors[u.socketId] !== undefined)
+                .map(u => {
+                    const { top, left } = getCaretCoordinates(textarea, cursors[u.socketId]);
+                    return { ...u, top, left };
+                });
+            setMarkers(next);
+        }, 30); // small delay smooths out rapid back-to-back updates
+
+        return () => clearTimeout(timeoutId);
     }, [content, cursors, otherUsers]);
 
     const handleTitleChange = (newTitle) => {
@@ -59,7 +84,7 @@ const Editor = ({ initialData, onBack, documentId }) => {
 
     return (
         <div className="document-editor">
-            <div className="presence-bar" style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+            <div className="presence-bar" style={{ display: 'flex', gap: '8px', marginBottom: '8px', alignItems: 'center' }}>
                 {otherUsers.map(u => (
                     <span key={u.socketId} style={{
                         backgroundColor: u.color, color: '#fff', padding: '2px 8px',
@@ -68,6 +93,9 @@ const Editor = ({ initialData, onBack, documentId }) => {
                         {u.name}
                     </span>
                 ))}
+                <button className="btn" onClick={() => setShowShareModal(true)} style={{ marginLeft: 'auto' }}>
+                    Share
+                </button>
             </div>
 
             <input
@@ -78,7 +106,6 @@ const Editor = ({ initialData, onBack, documentId }) => {
                 className="title-input"
             />
 
-            {/* Wrapper needed so the cursor overlay can be positioned absolutely on top of the textarea */}
             <div style={{ position: 'relative', flex: 1, display: 'flex' }}>
                 <textarea
                     ref={textareaRef}
@@ -127,6 +154,15 @@ const Editor = ({ initialData, onBack, documentId }) => {
                 <span>{connected ? 'Connected' : 'Auto-Save On'}</span>
                 {error && <span style={{ color: 'red' }}>{error}</span>}
             </div>
+
+            {showShareModal && (
+                <ShareModal
+                    documentId={documentId}
+                    isPublic={initialData.isPublic}
+                    collaborators={initialData.collaborators}
+                    onClose={() => setShowShareModal(false)}
+                />
+            )}
         </div>
     );
 };
