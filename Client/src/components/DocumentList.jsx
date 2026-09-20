@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { getDocuments, createDocument, deleteDocument } from '../api/documentService';
+import { useAuth } from '../context/AuthContext'; // NEW
 
 const DocumentList = ({ onSelectDocument }) => {
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const { user, logoutUser } = useAuth(); // NEW
 
   useEffect(() => {
     fetchDocuments();
@@ -54,6 +56,12 @@ const DocumentList = ({ onSelectDocument }) => {
 
   return (
     <div className="document-list">
+      {/* NEW: top bar with user info and logout */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+        <span>Logged in as {user?.name}</span>
+        <button className="btn btn-secondary" onClick={logoutUser}>Log out</button>
+      </div>
+
       <button className="btn" onClick={handleNewDocument}>New Document</button>
       <div>
         {documents.map(doc => (
