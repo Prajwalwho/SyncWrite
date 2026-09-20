@@ -50,6 +50,19 @@ const DocumentSchema = new mongoose.Schema(
         default: 0,
     },
     opsLog: [OpsLogSchema],
+    owner: {                                    
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+    },
+    collaborators: [{                            
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    }],
+    isPublic: {                                   
+      type: Boolean,
+      default: false,
+    },
   },
   { timestamps: true }
 );
