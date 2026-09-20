@@ -1,7 +1,9 @@
 import mongoose from 'mongoose';
+import jwt from 'jsonwebtoken'; // NEW
 import { loadDocument, appendOperation } from '../utils/documentStore.js';
 import { applyOp, transformSequence, validateOp } from '../ot/operations.js';
 import Document from '../models/Document.js';
+import User from '../models/User.js'; // NEW
 
 const registerDocumentSocket = (io) => {
 const userSocketMap = {};
@@ -20,14 +22,9 @@ const withDocumentLock = (documentId, fn) => {
     return next;
 };
 
-// NEW: presence tracking — everything below until the next comment block
 const documentUsers = new Map(); // documentId -> Map(socketId -> {name, color})
 
-const ADJECTIVES = ['Swift', 'Clever', 'Bright', 'Calm', 'Bold', 'Quiet', 'Quick', 'Sharp'];
-const ANIMALS = ['Fox', 'Owl', 'Wolf', 'Hawk', 'Bear', 'Lynx', 'Otter', 'Falcon'];
 const COLORS = ['#e63946', '#2a9d8f', '#e9c46a', '#457b9d', '#f4a261', '#8338ec', '#3a86ff', '#fb5607'];
-
-const randomName = () => `${ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)]} ${ANIMALS[Math.floor(Math.random() * ANIMALS.length)]}`;
 const randomColor = () => COLORS[Math.floor(Math.random() * COLORS.length)];
 
 const broadcastPresence = (documentId) => {
@@ -43,10 +40,28 @@ const removeUserFromDocument = (documentId, socketId) => {
         broadcastPresence(documentId);
     }
 };
-// END NEW
+
+// NEW: authenticate every socket connection before it's allowed through
+io.use(async (socket, next) => {
+  try {
+    const token = socket.handshake.auth?.token;
+    if (!token) {
+      return next(new Error('Authentication required'));
+    }
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await User.findById(decoded.userId);
+    if (!user) {
+      return next(new Error('User no longer exists'));
+    }
+    socket.user = user;
+    next();
+  } catch (err) {
+    next(new Error('Invalid or expired token'));
+  }
+});
 
   io.on('connection', (socket) => {
-    console.log('a user connected');
+    console.log('a user connected:', socket.user?.name);
 
     socket.on('join-document', async ({ documentId }) => {
       if (!mongoose.Types.ObjectId.isValid(documentId)) {
@@ -54,12 +69,24 @@ const removeUserFromDocument = (documentId, socketId) => {
         return;
       }
 
+      // NEW: enforce the same access rules as the REST API
+      const docCheck = await Document.findById(documentId);
+      if (!docCheck) {
+        socket.emit('error', { message: 'Document not found' });
+        return;
+      }
+      const isOwner = docCheck.owner.equals(socket.user._id);
+      const isCollaborator = docCheck.collaborators.some(c => c.equals(socket.user._id));
+      if (!isOwner && !isCollaborator && !docCheck.isPublic) {
+        socket.emit('error', { message: 'You do not have access to this document' });
+        return;
+      }
+
       userSocketMap[socket.id] = documentId;
       socket.join(documentId);
 
-      // NEW: register this socket as present on the document
       if (!documentUsers.has(documentId)) documentUsers.set(documentId, new Map());
-      const userInfo = { name: randomName(), color: randomColor(), cursorPos: 0 };
+      const userInfo = { name: socket.user.name, color: randomColor(), cursorPos: 0 }; // CHANGED
       documentUsers.get(documentId).set(socket.id, userInfo);
       socket.emit('presence-self', { socketId: socket.id, ...userInfo });
       broadcastPresence(documentId);
@@ -71,12 +98,7 @@ const removeUserFromDocument = (documentId, socketId) => {
         return;
       }
 
-      const doc = await Document.findById(documentId);
-      if (!doc) {
-        socket.emit('error', { message: 'Document not found' });
-        return;
-      }
-
+      const doc = docCheck; // CHANGED: reuse already-fetched doc, avoid duplicate query
       if (doc.revision === undefined || doc.revision === null) {
         doc.revision = 0;
         await doc.save();
@@ -154,14 +176,14 @@ const removeUserFromDocument = (documentId, socketId) => {
     socket.on('leave-document', ({ documentId }) => {
       socket.leave(documentId);
       delete userSocketMap[socket.id];
-      removeUserFromDocument(documentId, socket.id); // NEW
+      removeUserFromDocument(documentId, socket.id);
       socket.to(documentId).emit('user-left', { socketId: socket.id });
     });
 
     socket.on('disconnect', () => {
       const documentId = userSocketMap[socket.id];
       if (documentId) {
-        removeUserFromDocument(documentId, socket.id); // NEW
+        removeUserFromDocument(documentId, socket.id);
         socket.to(documentId).emit('user-left', { socketId: socket.id });
         delete userSocketMap[socket.id];
       }
