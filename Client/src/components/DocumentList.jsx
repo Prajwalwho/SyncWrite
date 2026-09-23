@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { getDocuments, createDocument, deleteDocument } from '../api/documentService';
-import { useAuth } from '../context/AuthContext'; // NEW
+import { useAuth } from '../context/AuthContext';
 
 const DocumentList = ({ onSelectDocument }) => {
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const { user, logoutUser } = useAuth(); // NEW
+  const { user, logoutUser } = useAuth();
 
   useEffect(() => {
     fetchDocuments();
@@ -56,13 +56,18 @@ const DocumentList = ({ onSelectDocument }) => {
 
   return (
     <div className="document-list">
-      {/* NEW: top bar with user info and logout */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-        <span>Logged in as {user?.name}</span>
+      {/* CHANGED: top bar restyled — muted label, secondary-style logout button, more breathing room */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '28px' }}>
+        <span style={{ fontFamily: "'Inter', sans-serif", fontSize: '14px', color: 'var(--ink-muted)' }}>
+          Logged in as {user?.name}
+        </span>
         <button className="btn btn-secondary" onClick={logoutUser}>Log out</button>
       </div>
 
-      <button className="btn" onClick={handleNewDocument}>New Document</button>
+      <button className="btn" onClick={handleNewDocument} style={{ marginBottom: '8px' }}>
+        New Document
+      </button>
+
       <div>
         {documents.map(doc => (
           <div key={doc._id} className="doc-row">
